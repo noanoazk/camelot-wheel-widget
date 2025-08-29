@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Camelot Wheel – Interactive Notion Widget</title>
+  <style>
+    :root {
+      --bg: #0b0d10;
+      --card: #12161b;
+      --ring: #1f2730;
+      --text: #e6edf3;
+      --muted: #94a3b8;
+      --primary: #7dd3fc; /* cyan */
+      --compatible: #86efac; /* green */
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
+      background: radial-gradient(1200px 800px at 50% -10%, #0f141a 0%, var(--bg) 60%);
+      color: var(--text);
+      display: grid; place-items: center;
+    }
+    .wrap { width: min(920px, 95vw); padding: 20px; }
+    .card {
+      background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 20px; padding: 18px; box-shadow: 0 10px 40px rgba(0,0,0,.35);
+    }
+    .header { display:flex; flex-wrap:wrap; align-items:center; gap:12px; justify-content:space-between; margin-bottom:10px; }
+    .title { font-size: clamp(18px, 2vw, 22px); font-weight: 700; letter-spacing: .2px; }
+    .controls { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .btn, select {
+      appearance: none; border: 1px solid rgba(255,255,255,0.12); background: #0f1318; color: var(--text);
+      padding: 8px 12px; border-radius: 12px; cursor: pointer; font-weight: 600;
+    }
+    .btn.secondary { background: #0a0d11; color: var(--muted); }
+    .note { color: var(--muted); font-size: 13px; margin-top: 10px; line-height: 1.4; }
+
+    .wheel-wrap { position: relative; width: 100%; aspect-ratio: 1 / 1; display:grid; place-items:center; margin-top: 10px; }
+    svg { width: 100%; height: 100%; filter: drop-shadow(0 10px 15px rgba(0,0,0,.4)); }
+    .label { font-weight: 700; font-size: 13px; user-select: none; }
+
+    .legend { display:flex; gap:14px; flex-wrap:wrap; margin-top: 14px; }
+    .pill { display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius: 999px; background: #0f1318; border:1px solid rgba(255,255,255,0.08); font-size:12px; color: var(--muted); }
+    .dot { width:10px; height:10px; border-radius: 999px; background: var(--primary); }
+    .dot.green { background: var(--compatible); }
+
+    /* Hover tooltip */
+    .tooltip { position: fixed; pointer-events: none; padding: 6px 8px; border-radius:8px; font-size:12px;
+      background: #0b0f14; color: var(--text); border:1px solid rgba(255,255,255,.08); opacity:0; transform: translateY(-6px); transition: opacity .12s ease, transform .12s ease; }
+    .tooltip.show { opacity: 1; transform: translateY(0); }
+
+    /* Mobile tweaks */
+    @media (max-width: 520px) {
+      .label { font-size: 11px; }
+      .controls { width: 100%; justify-content: space-between; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="header">
+        <div class="title">Interactive Camelot Wheel</div>
+        <div class="controls">
+          <select id="displayMode">
+            <option value="camelot">Camelot (1A–12A / 1B–12B)</option>
+            <option value="notes">Musical Notes</option>
+          </select>
+          <button class="btn secondary" id="clearBtn" title="Clear selection">Clear</button>
+        </div>
+      </div>
+      <div class="wheel-wrap">
+        <svg id="wheel" viewBox="-220 -220 440 440" aria-label="Camelot Key Wheel" role="img"></svg>
+      </div>
+      <div class="legend">
+        <span class="pill"><span class="dot"></span> Selected</span>
+        <span class="pill"><span class="dot green"></span> Compatible (±1 same letter, same number other letter)</span>
+      </div>
+      <p class="note">How it works: Click a segment to highlight compatible keys for harmonic mixing. Compatible = same number (switch A/B) or ±1 with the same letter (energy boost/calm).
+        Toggle “Musical Notes” if you prefer traditional key names. Built for quick checks in Notion embeds.
+      </p>
+    </div>
+  </div>
+
+  <div id="tt" class="tooltip" role="status"></div>
+
+  <script>
+    // Mapping between Camelot codes and note names.
+    // Source logic follows common Camelot <-> Circle of Fifths pairings.
+    const camelotToNotes = {
+      '1A':'Ab minor', '2A':'Eb minor', '3A':'Bb minor', '4A':'F minor', '5A':'C minor', '6A':'G minor', '7A':'D minor', '8A':'A minor', '9A':'E minor', '10A':'B minor', '11A':'F# minor', '12A':'Db minor',
+      '1B':'B major', '2B':'F# major', '3B':'Db major', '4B':'Ab major', '5B':'Eb major', '6B':'Bb major', '7B':'F major', '8B':'C major', '9B':'G major', '10B':'D major', '11B':'A major', '12B':'E major'
+    };
+
+    const svg = document.getElementById('wheel');
+    const tooltip = document.getElementById('tt');
+    const modeSel = document.getElementById('displayMode');
+    const clearBtn = document.getElementById('clearBtn');
+
+    const radiusOuter = 200;   // outer radius
+    const radiusInner = 86;    // inner radius to create ring
+
+    const sectors = []; // will hold objects: {code, letter, num, pathEl, labelEl}
+
+    // Create background rings
+    function addCircle(r, stroke, w) {
+      const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      c.setAttribute('cx', '0'); c.setAttribute('cy', '0');
+      c.setAttribute('r', r);
+      c.setAttribute('fill', 'none');
+      c.setAttribute('stroke', stroke);
+      c.setAttribute('stroke-width', w);
+      c.setAttribute('opacity', '0.3');
+      svg.appendChild(c);
+    }
+    addCircle(radiusOuter, 'var(--ring)', 2);
+    addCircle(radiusInner, 'var(--ring)', 1);
+
+    // Utilities to build donut sectors
+    function polarToXY(r, angle) { return [ r * Math.cos(angle), r * Math.sin(angle) ]; }
+    function describeSector(innerR, outerR, startAngle, endAngle) {
+      const [x1o, y1o] = polarToXY(outerR, startAngle);
+      const [x2o, y2o] = polarToXY(outerR, endAngle);
+      const [x1i, y1i] = polarToXY(innerR, endAngle);
+      const [x2i, y2i] = polarToXY(innerR, startAngle);
+      const largeArc = (endAngle - startAngle) > Math.PI ? 1 : 0;
+      return [
+        `M ${x1o} ${y1o}`,
+        `A ${outerR} ${outerR} 0 ${largeArc} 1 ${x2o} ${y2o}`,
+        `L ${x1i} ${y1i}`,
+        `A ${innerR} ${innerR} 0 ${largeArc} 0 ${x2i} ${y2i}`,
+        'Z'
+      ].join(' ');
+    }
+
+    // Build 24 sectors (12 A / inner ring, 12 B / outer ring)
+    const total = 12;
+    const step = (2*Math.PI) / total;
+
+    for (let i = 0; i < total; i++) {
+      const num = i + 1;
+      const start = -Math.PI/2 + i*step; // start at top
+      const end = start + step;
+
+      // Outer ring = B (majors)
+      const codeB = `${num}B`;
+      const pathB = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      pathB.setAttribute('d', describeSector(radiusInner+2, radiusOuter, start, end));
+      pathB.setAttribute('fill', '#0e141a');
+      pathB.setAttribute('stroke', 'rgba(255,255,255,0.08)');
+      pathB.setAttribute('stroke-width', '1');
+      pathB.dataset.code = codeB;
+      svg.appendChild(pathB);
+
+      // Inner ring = A (minors)
+      const codeA = `${num}A`;
+      const pathA = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      pathA.setAttribute('d', describeSector(30, radiusInner-2, start, end));
+      pathA.setAttribute('fill', '#0c1117');
+      pathA.setAttribute('stroke', 'rgba(255,255,255,0.08)');
+      pathA.setAttribute('stroke-width', '1');
+      pathA.dataset.code = codeA;
+      svg.appendChild(pathA);
+
+      // Labels (centered angle)
+      const mid = (start + end) / 2;
+      const [lxB, lyB] = polarToXY((radiusInner + radiusOuter)/2 + 2, mid);
+      const [lxA, lyA] = polarToXY((30 + radiusInner)/2, mid);
+
+      const labelB = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      labelB.setAttribute('x', lxB);
+      labelB.setAttribute('y', lyB + 4);
+      labelB.setAttribute('text-anchor', 'middle');
+      labelB.setAttribute('class', 'label');
+      labelB.textContent = codeB;
+      svg.appendChild(labelB);
+
+      const labelA = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      labelA.setAttribute('x', lxA);
+      labelA.setAttribute('y', lyA + 4);
+      labelA.setAttribute('text-anchor', 'middle');
+      labelA.setAttribute('class', 'label');
+      labelA.textContent = codeA;
+      svg.appendChild(labelA);
+
+      sectors.push({ code: codeB, letter: 'B', num, pathEl: pathB, labelEl: labelB });
+      sectors.push({ code: codeA, letter: 'A', num, pathEl: pathA, labelEl: labelA });
+    }
+
+    // Selection + compatibility logic
+    let selected = null;
+    function resetColors() {
+      sectors.forEach(s => {
+        s.pathEl.style.fill = (s.letter === 'B') ? '#0e141a' : '#0c1117';
+        s.labelEl.style.fill = 'var(--text)';
+        s.pathEl.style.filter = '';
+      });
+    }
+
+    function highlight(code) {
+      resetColors();
+      selected = code;
+      const { num, letter } = sectors.find(s => s.code === code);
+      const sameNumberOther = `${num}${letter === 'A' ? 'B' : 'A'}`;
+      const plus1 = `${((num) % 12) + 1}${letter}`;
+      const minus1 = `${((num + 10) % 12) + 1}${letter}`; // num-1 wrapped
+
+      const setFill = (c, fill, glow=false) => {
+        const sec = sectors.find(s => s.code === c);
+        if (!sec) return;
+        sec.pathEl.style.fill = fill;
+        sec.labelEl.style.fill = '#0b0d10';
+        if (glow) sec.pathEl.style.filter = 'drop-shadow(0 0 14px rgba(125,211,252,.6))';
+      };
+
+      setFill(code, 'var(--primary)', true);
+      setFill(sameNumberOther, 'var(--compatible)');
+      setFill(plus1, 'var(--compatible)');
+      setFill(minus1, 'var(--compatible)');
+    }
+
+    function showTooltip(evt, text) {
+      tooltip.textContent = text;
+      const pad = 14;
+      tooltip.style.left = (evt.clientX + pad) + 'px';
+      tooltip.style.top = (evt.clientY + pad) + 'px';
+      tooltip.classList.add('show');
+    }
+    function hideTooltip() { tooltip.classList.remove('show'); }
+
+    // Events
+    sectors.forEach(s => {
+      s.pathEl.style.cursor = 'pointer';
+      s.pathEl.addEventListener('click', () => highlight(s.code));
+      s.pathEl.addEventListener('mousemove', (e) => {
+        const display = (modeSel.value === 'camelot') ? s.code : camelotToNotes[s.code];
+        const compat = (() => {
+          const sameNumberOther = `${s.num}${s.letter === 'A' ? 'B' : 'A'}`;
+          const plus1 = `${((s.num) % 12) + 1}${s.letter}`;
+          const minus1 = `${((s.num + 10) % 12) + 1}${s.letter}`;
+          return [sameNumberOther, plus1, minus1].join(', ');
+        })();
+        showTooltip(e, `${display} → compatible with ${compat}`);
+      });
+      s.pathEl.addEventListener('mouseleave', hideTooltip);
+    });
+
+    // Toggle display mode
+    function updateLabels() {
+      sectors.forEach(s => {
+        s.labelEl.textContent = (modeSel.value === 'camelot') ? s.code : camelotToNotes[s.code].replace(' major','').replace(' minor','');
+      });
+    }
+    modeSel.addEventListener('change', updateLabels);
+
+    clearBtn.addEventListener('click', () => { selected = null; resetColors(); });
+
+    updateLabels();
+  </script>
+</body>
+</html>
